@@ -13,8 +13,12 @@
 # Private keys are never committed, never pasted into a terminal that logs, and never
 # shared between environments.
 
+# Generated 2026-09-10. Private keys at ~/.config/age/malipopay-cbs-{uat,prod}.key
+# and owed as GitHub secrets AGE_KEY_CBS_UAT / AGE_KEY_CBS_PROD and at
+# /etc/malipopay-cbs/age/ on each droplet.
+
 creation_rules:
   - path_regex: \.env\.uat$
-    age: REPLACE_WITH_AGE_PUBLIC_KEY_CBS_UAT
+    age: age1rmuhavwg72r3yl6dk2dswkgnq0m4nmfq7jzwjha5y58evhp64clqf608tn
   - path_regex: \.env\.production$
-    age: REPLACE_WITH_AGE_PUBLIC_KEY_CBS_PROD
+    age: age1v4gfcv5gvzsughz2tg377k7jn3fh2eaxvjl99vr2zqx4k6fg69hs8p8hlf
