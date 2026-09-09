@@ -10,11 +10,12 @@ available to build the release one, which left the image itself unproven.
 JDK 21 container, so it can be proven on a machine with Docker and no Java, and before any
 registry credentials exist. `deploy/build/local-image.init.gradle` supplies the task wiring
 upstream never added for `jibBuildTar`, from outside the source tree.
-**Proven.** 21 passed, 0 failed against `lockwoodtech/malipopay-fineract:1.15.0-mp.1` on a
-clean volume, replay included.
-**Three defects fixed on the way**, each of which would have failed on first real use: the
+**Proven, on both architectures.** 21 passed, 0 failed on arm64, and 21 passed, 0 failed on
+the 64-bit Intel image the hosts will actually run, each on a clean volume, replay included.
+**Four defects fixed on the way**, each of which would have failed on first real use: the
 `-x buildJavaSdk` exclusion killing the Avro generator, `jibBuildTar`'s missing dependency
-wiring, and a local build silently also producing a `latest` tag.
+wiring, a local build silently also producing a `latest` tag, and a platform change being
+ignored because Gradle reported the task up to date and loaded the previous architecture.
 **Related:** `deploy/docs/proof-2026-09-10-release-image.md`
 
 ## 2026-09-10 · docs(deploy): first-deploy runbook, and a measured upgrade size

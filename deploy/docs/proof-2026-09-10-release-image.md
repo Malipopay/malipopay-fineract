@@ -56,10 +56,30 @@ in place, so the load produced `1.15.0-mp.1`, `1.16.0-SNAPSHOT` and `latest` tog
 `adr/0001-fork-and-pin-fineract.md` exists to avoid. The repository and tag are now passed
 separately, which replaces the list, and the script warns if any other tag survives.
 
-## Still not proven, and it needs the droplet
+## Both architectures, proven separately
 
-This ran on arm64 on a developer machine. The UAT and production hosts are amd64, and the CI
-workflow builds both architectures. Nothing in the run depends on the architecture, but the
-amd64 image itself has not been built or started. Everything else on the list is unchanged:
+The first run was arm64, the architecture of the machine it was built on. The UAT and
+production hosts are 64-bit Intel, so that image was built and proven too, under emulation on
+the same machine.
+
+| | arm64 | amd64 |
+|---|---|---|
+| digest | `sha256:0a8163f6dcc4…` | `sha256:33f531a7877d…` |
+| size | 372 MB | 373 MB |
+| health | healthy | healthy |
+| result | 21 passed, 0 failed | 21 passed, 0 failed |
+
+Full amd64 output in `proof-2026-09-10-amd64.txt`. The replayed deposit behaves identically
+on both: original transaction id returned, `x-served-from-cache: true`, balance 100,000.
+
+**A fourth defect, found by building the second architecture.** Gradle does not track
+`-Djib.from.platforms` as a task input, so `jibBuildTar` reported `UP-TO-DATE` and left the
+previous architecture's tar in place. The build reported success and loaded an arm64 image
+where amd64 had been asked for. A green build is not evidence of the right architecture.
+`build-image-local.sh` now removes the output to force the task, and asserts the loaded
+image's architecture matches what was requested rather than trusting the exit code.
+
+## Still not proven, and all of it needs the host
+
 NGINX and TLS, the address allow list, backup and restore, close of business, and the
-operations console all need the host.
+operations console. Nothing about the image itself remains untested.
