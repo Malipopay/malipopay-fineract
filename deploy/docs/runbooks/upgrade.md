@@ -22,6 +22,24 @@ system that is a decision a person makes, with the numbers in front of them.
 3. Count the database changesets in the diff. The sync workflow puts the number in the pull
    request body. A handful is routine. Dozens on a large loan portfolio is a window, not a
    deploy.
+
+   For calibration, the last upstream upgrade was not small:
+
+   | 1.14.0 to 1.15.0 | |
+   |---|---|
+   | commits | 1,238 |
+   | database changesets touched | 112 |
+   | Java version | unchanged at 21 |
+
+   Measured on the fork with:
+
+   ```bash
+   git diff --name-only 1.14.0...1.15.0 -- '*/db/changelog/*' | wc -l
+   git rev-list --count 1.14.0..1.15.0
+   ```
+
+   112 changesets is a migration to schedule and to time on a copy of production data first,
+   not something to run at the end of a working day.
 4. Build the image and let it run on UAT for at least one full close-of-business cycle.
 
 ## The window
