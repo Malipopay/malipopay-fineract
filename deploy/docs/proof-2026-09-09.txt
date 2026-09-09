@@ -1,0 +1,55 @@
+
+0. Environment
+  base    http://127.0.0.1:18080
+  tenant  uat
+  user    mifos
+  image   apache/fineract:latest
+  digest  apache/fineract@sha256:387ea8078979277fa3a11960cc770deb5ca82be01ffa2816889402bc603b6bae
+
+1. Health
+  PASS  actuator/health is UP
+
+2. Authentication and tenant context
+  PASS  GET /offices authenticated: 200
+  PASS  unauthenticated request refused: 401 (control)
+  PASS  unknown tenant refused: 400 (control)
+  head office id=1 name=Head Office
+
+3. Currency and savings product
+  PASS  TZS enabled (TZS USD)
+  PASS  savings product created id=1
+
+4. Customer and account
+  PASS  client created id=1
+  PASS  savings account created id=1
+  PASS  account approved
+  PASS  account activated
+
+5. Payment type
+  PASS  payment type id=4
+
+6. Deposit, and the same deposit replayed
+  PASS  deposit posted, cbsTransactionId=1
+  replay status HTTP/1.1 200   x-served-from-cache: true
+  PASS  replay returned the ORIGINAL transaction id, no second credit
+  PASS  x-served-from-cache: true on the replay
+  PASS  balance is 100000.000000 after two identical calls
+
+7. Withdrawal
+  PASS  withdrawal posted id=2
+  PASS  balance is 75000.000000
+
+8. Statement
+  PASS  statement carries exactly 2 transactions
+    2  Withdrawal  25000.000000  75000.000000
+    1  Deposit  100000.000000  100000.000000
+
+9. Surfaces that must NOT be open
+  PASS  actuator/env is not exposed (404)
+  PASS  actuator/heapdump is not exposed (404)
+  PASS  actuator/loggers is not exposed (404)
+  actuator/prometheus 200 (expected 200: metrics are deliberately exposed to the host)
+
+Result
+  21 passed, 0 failed
+

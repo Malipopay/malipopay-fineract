@@ -1,0 +1,51 @@
+# External business events, phase 4 only.
+#
+# Fineract emits business events to Kafka or to a JMS broker. It has no RabbitMQ producer,
+# and Malipopay's broker is RabbitMQ, so ActiveMQ is the bridge: Fineract publishes JMS,
+# the banking service consumes over STOMP and republishes canonical banking.* events onto
+# the existing RabbitMQ vhost. Kafka was rejected for a single-droplet deployment.
+#
+# Payloads are Avro, not JSON. Schemas live in fineract-avro-schemas/src/main/avro. The
+# consumer needs an Avro decoder; a JSON.parse will not work.
+#
+# Turn on with FINERACT_EXTERNAL_EVENTS_ENABLED=true and
+# FINERACT_EXTERNAL_EVENTS_PRODUCER_JMS_ENABLED=true in the env file, then:
+#   docker compose -f docker-compose.yml -f docker-compose.events.yml up -d
+
+services:
+  activemq:
+    image: symptoma/activemq:${ACTIVEMQ_IMAGE_TAG:-5.18.3}
+    container_name: malipopay-cbs-activemq
+    restart: unless-stopped
+    environment:
+      ACTIVEMQ_USERNAME: ${ACTIVEMQ_USERNAME:?}
+      ACTIVEMQ_PASSWORD: ${ACTIVEMQ_PASSWORD:?}
+    expose:
+      - "61616"
+      - "61613"
+    ports:
+      # STOMP for the banking service consumer, loopback only.
+      - "${ACTIVEMQ_BIND_ADDRESS:-127.0.0.1}:${ACTIVEMQ_STOMP_PORT:-61613}:61613"
+    volumes:
+      - cbs-activemq:/opt/activemq/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks: [cbs]
+
+  fineract:
+    environment:
+      FINERACT_EXTERNAL_EVENTS_ENABLED: "true"
+      FINERACT_EXTERNAL_EVENTS_PRODUCER_JMS_ENABLED: "true"
+      FINERACT_EXTERNAL_EVENTS_PRODUCER_JMS_BROKER_URL: tcp://activemq:61616
+      FINERACT_EXTERNAL_EVENTS_PRODUCER_JMS_BROKER_USERNAME: ${ACTIVEMQ_USERNAME:?}
+      FINERACT_EXTERNAL_EVENTS_PRODUCER_JMS_BROKER_PASSWORD: ${ACTIVEMQ_PASSWORD:?}
+      FINERACT_EXTERNAL_EVENTS_PRODUCER_JMS_QUEUE_NAME: ${FINERACT_EVENTS_QUEUE:-malipopay.cbs.events}
+    depends_on:
+      activemq:
+        condition: service_started
+
+volumes:
+  cbs-activemq:

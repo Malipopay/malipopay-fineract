@@ -1,0 +1,11 @@
+# Plaintext environment files never leave the machine that created them.
+env/.env
+env/.env.*
+!env/.env.*.enc
+env/*.key
+# Local proof output that carries hostnames or tokens.
+docs/local-proof-*.log
+
+# The repository root ignores any directory named docs/. This one is ours and is kept.
+!docs/
+!docs/**

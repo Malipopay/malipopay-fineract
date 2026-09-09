@@ -1,0 +1,20 @@
+# Age recipients for the core banking environment files.
+#
+# These are NEW key pairs, deliberately separate from the Malipopay service keys. A leak of
+# a payment service environment must not decrypt the core banking database credentials.
+#
+# Generate on the machine that will hold them:
+#   age-keygen -o ~/.config/age/malipopay-cbs-uat.key
+#   age-keygen -o ~/.config/age/malipopay-cbs-prod.key
+# then paste the public keys below and store the private keys as the GitHub secrets
+# AGE_KEY_CBS_UAT and AGE_KEY_CBS_PROD, and at /etc/malipopay-cbs/age/ on each droplet
+# (mode 600, owned by the deploy user).
+#
+# Private keys are never committed, never pasted into a terminal that logs, and never
+# shared between environments.
+
+creation_rules:
+  - path_regex: \.env\.uat$
+    age: REPLACE_WITH_AGE_PUBLIC_KEY_CBS_UAT
+  - path_regex: \.env\.production$
+    age: REPLACE_WITH_AGE_PUBLIC_KEY_CBS_PROD

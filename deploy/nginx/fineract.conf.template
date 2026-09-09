@@ -1,0 +1,71 @@
+# Fineract API vhost. Rendered by deploy/nginx/render.sh, which fills every ${VARIABLE}
+# from the host's own configuration. The rendered file is NOT committed: it carries the
+# addresses that are allowed to reach the core banking system.
+#
+# TLS terminates here. Fineract itself listens on plain HTTP on the loopback interface.
+
+geo $cbs_allowed {
+    default 0;
+    include /etc/nginx/snippets/malipopay-cbs-allow.conf;   # generated, one CIDR per line
+}
+
+server {
+    listen 80;
+    server_name ${CBS_HOST};
+    location /.well-known/acme-challenge/ { root /var/www/html; }
+    location / { return 301 https://$host$request_uri; }
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name ${CBS_HOST};
+
+    ssl_certificate     /etc/letsencrypt/live/${CBS_HOST}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${CBS_HOST}/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache   shared:cbs:10m;
+
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options DENY always;
+    add_header Referrer-Policy no-referrer always;
+
+    # The core banking system is not a public API. Only the banking service and named
+    # operator addresses reach it. Everything else is refused before it touches Fineract,
+    # which by default accepts HTTP basic authentication and would otherwise be brute
+    # forceable from anywhere.
+    if ($cbs_allowed = 0) { return 403; }
+
+    access_log /var/log/nginx/cbs-access.log;
+    error_log  /var/log/nginx/cbs-error.log warn;
+
+    client_max_body_size 12m;
+
+    # The API documentation surface stays closed in production even when the application
+    # would serve it.
+    location ~ ^/fineract-provider/(swagger-ui|api-docs|v3/api-docs) { return 404; }
+
+    # Actuator: health for the load check, prometheus for scraping, nothing else. Neither is
+    # reachable from outside the allow list either way.
+    location = /fineract-provider/actuator/health     { proxy_pass http://127.0.0.1:${FINERACT_PORT}; }
+    location = /fineract-provider/actuator/prometheus { proxy_pass http://127.0.0.1:${FINERACT_PORT}; }
+    location ~ ^/fineract-provider/actuator           { return 404; }
+
+    location / {
+        proxy_pass http://127.0.0.1:${FINERACT_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # The tenant header is what selects the database. It must survive the proxy.
+        proxy_set_header Fineract-Platform-TenantId $http_fineract_platform_tenantid;
+        proxy_set_header Idempotency-Key            $http_idempotency_key;
+        # Close of business and batch calls are slow. Do not cut them off at the default 60s.
+        proxy_connect_timeout 10s;
+        proxy_send_timeout    180s;
+        proxy_read_timeout    180s;
+    }
+}

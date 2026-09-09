@@ -1,0 +1,36 @@
+# Mifos X web app as the back office operations console.
+#
+# openMF/web-app is the maintained community UI. openMF/community-app is archived and
+# deprecated, so the upstream docker-compose-community-app.yml is not used here.
+#
+# Read-only is NOT a property of this container. The console authenticates as a Fineract
+# user, so what an operator can do is decided entirely by that user's Fineract role and
+# permissions. Give console users a role built from read permissions plus the specific
+# maker actions they need, and never the "Super user" role.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.console.yml up -d
+
+services:
+  console:
+    # Pin the digest-bearing dev tag. "dev" moves with every upstream commit and "master"
+    # has not been rebuilt since March 2025.
+    image: openmf/web-app:${CONSOLE_IMAGE_TAG:?set CONSOLE_IMAGE_TAG}
+    container_name: malipopay-cbs-console
+    restart: unless-stopped
+    depends_on:
+      fineract:
+        condition: service_healthy
+    environment:
+      FINERACT_API_URLS: ${CBS_PUBLIC_URL:?set CBS_PUBLIC_URL}
+      FINERACT_API_URL: ${CBS_PUBLIC_URL:?}
+      FINERACT_API_PROVIDER: /fineract-provider/api
+      FINERACT_API_VERSION: /v1
+      FINERACT_PLATFORM_TENANT_IDENTIFIER: ${FINERACT_TENANT_IDENTIFIER:?}
+    ports:
+      - "${CONSOLE_BIND_ADDRESS:-127.0.0.1}:${CONSOLE_HOST_PORT:-8081}:80"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks: [cbs]

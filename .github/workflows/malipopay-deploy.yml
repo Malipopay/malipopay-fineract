@@ -1,0 +1,87 @@
+# Deploy the deployment pack and a pinned image to a core banking host.
+#
+# The image is built once by malipopay-docker-build.yml and only pulled here. Nothing is
+# built on the server, so what runs in production is a registry artefact that can be
+# reproduced from this repository alone.
+
+name: Deploy core banking
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options: [uat, production]
+      image:
+        description: 'Full image reference, for example lockwoodtech/malipopay-fineract:1.15.0-mp.1'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  # Two deploys to one host at once corrupts the release. Queue, never cancel: cancelling
+  # mid-release leaves the stack half-started.
+  group: cbs-deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    environment: ${{ inputs.environment }}
+    timeout-minutes: 30
+    steps:
+      - name: Refuse a floating tag
+        run: |
+          case "${{ inputs.image }}" in
+            *:latest|*:develop)
+              echo "Refusing '${{ inputs.image }}'." >&2
+              echo "apache/fineract:latest is the develop branch HEAD, not a release." >&2
+              exit 1 ;;
+            *:*) : ;;
+            *) echo "Image '${{ inputs.image }}' carries no tag." >&2; exit 1 ;;
+          esac
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: malipopay
+          persist-credentials: false
+
+      - name: Install the deploy key
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "${{ secrets.CBS_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "${{ secrets.CBS_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+
+      - name: Ship the deployment pack
+        env:
+          HOST: ${{ secrets.CBS_HOST }}
+          USER: ${{ secrets.CBS_SSH_USER }}
+        run: |
+          # Only deploy/ goes to the server. The Fineract source tree is not needed there and
+          # its absence is the point: the host runs an image, it does not build one.
+          rsync -az --delete -e "ssh -i ~/.ssh/id_ed25519" \
+            deploy/ "${USER}@${HOST}:/opt/malipopay-cbs/deploy/"
+
+      - name: Release and verify
+        env:
+          HOST: ${{ secrets.CBS_HOST }}
+          USER: ${{ secrets.CBS_SSH_USER }}
+        run: |
+          # release.sh snapshots the database, pulls, starts, waits for a real health check
+          # and runs an authenticated smoke test. It exits non-zero if any of that fails, and
+          # this job fails with it.
+          ssh -i ~/.ssh/id_ed25519 "${USER}@${HOST}" \
+            "/opt/malipopay-cbs/deploy/scripts/release.sh ${{ inputs.environment }} '${{ inputs.image }}'"
+
+      - name: What is still owed
+        if: success()
+        run: |
+          echo "The deploy is green. That means healthy and authenticated, not verified."
+          echo "Run deploy/scripts/proof.sh against this environment and read the output"
+          echo "before telling anyone the release is done."

@@ -1,0 +1,183 @@
+# Malipopay core banking stack.
+#
+# Deliberately self-contained: it does NOT extend the upstream compose files under
+# config/docker/compose, because those load config/docker/env/fineract-common.env, which
+# enables the "test" Spring profile, opens an unauthenticated JDWP debugger on port 5000,
+# sets FINERACT_INSECURE_HTTP_CLIENT=true and hardcodes database passwords. Upstream marks
+# those files "FOR TESTING PURPOSES ONLY! NOT SUITABLE FOR PRODUCTION USAGE!" and the README
+# repeats the warning. Everything below comes from an env file instead.
+#
+# TLS is terminated by NGINX on the host. Fineract itself listens on plain HTTP, bound to the
+# loopback interface, so nothing in this file is reachable from outside the droplet.
+
+name: malipopay-cbs
+
+services:
+  db:
+    image: postgres:${POSTGRES_IMAGE_TAG:?set POSTGRES_IMAGE_TAG}
+    container_name: malipopay-cbs-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_SUPERUSER:?}
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?}
+      POSTGRES_DB: postgres
+      FINERACT_TENANTS_DB_NAME: ${FINERACT_TENANTS_DB_NAME:?}
+      FINERACT_TENANT_DB_NAME: ${FINERACT_DEFAULT_TENANTDB_NAME:?}
+      FINERACT_DB_USER: ${FINERACT_HIKARI_USERNAME:?}
+      FINERACT_DB_PASSWORD: ${FINERACT_HIKARI_PASSWORD:?}
+    volumes:
+      # PostgreSQL 18 changed where the official image keeps its data. It now uses a
+      # major-version subdirectory under /var/lib/postgresql so that pg_upgrade --link can
+      # work across a single mount point, and it REFUSES TO START if it finds a volume
+      # mounted at the old /var/lib/postgresql/data path. Mount the parent, not data.
+      - cbs-pgdata:/var/lib/postgresql
+      - ../postgres/init:/docker-entrypoint-initdb.d:ro
+    # Never published to a host interface. Only containers on this network reach it.
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -q -U $${POSTGRES_USER} -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    logging: &json-logging
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+    networks: [cbs]
+
+  fineract:
+    # Pinned by digest-bearing tag. Never "latest": on Docker Hub apache/fineract:latest is
+    # the develop branch HEAD, not a release, and no 1.13/1.14/1.15 tag was ever published.
+    image: ${FINERACT_IMAGE:?set FINERACT_IMAGE}
+    container_name: malipopay-cbs-fineract
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # --- identity and instance mode -------------------------------------------------
+      # Note the env var names: FINERACT_MODE_*_ENABLED. The published documentation calls
+      # these FINERACT_READ_MODE_ENABLED and friends, which bind to nothing; setting the
+      # documented spelling silently leaves every mode at its default of true.
+      FINERACT_NODE_ID: ${FINERACT_NODE_ID:-1}
+      FINERACT_MODE_READ_ENABLED: ${FINERACT_MODE_READ_ENABLED:-true}
+      FINERACT_MODE_WRITE_ENABLED: ${FINERACT_MODE_WRITE_ENABLED:-true}
+      FINERACT_MODE_BATCH_MANAGER_ENABLED: ${FINERACT_MODE_BATCH_MANAGER_ENABLED:-true}
+      FINERACT_MODE_BATCH_WORKER_ENABLED: ${FINERACT_MODE_BATCH_WORKER_ENABLED:-true}
+      # Liquibase runs on the write instance only. A second instance must set this false.
+      FINERACT_LIQUIBASE_ENABLED: ${FINERACT_LIQUIBASE_ENABLED:-true}
+
+      # --- server ---------------------------------------------------------------------
+      FINERACT_SERVER_PORT: "8080"
+      FINERACT_SERVER_SSL_ENABLED: "false"
+      FINERACT_SERVER_SERVLET_CONTEXT_PATH: /fineract-provider
+      SERVER_FORWARD_HEADERS_STRATEGY: FRAMEWORK
+
+      # --- security -------------------------------------------------------------------
+      FINERACT_SECURITY_BASICAUTH_ENABLED: ${FINERACT_SECURITY_BASICAUTH_ENABLED:-true}
+      FINERACT_SECURITY_OAUTH_ENABLED: ${FINERACT_SECURITY_OAUTH_ENABLED:-false}
+      FINERACT_SECURITY_2FA_ENABLED: ${FINERACT_SECURITY_2FA_ENABLED:-false}
+      FINERACT_SECURITY_HSTS_ENABLED: "true"
+      # Upstream defaults every CORS list to "*". The only browser client is the operations
+      # console, so name it explicitly.
+      FINERACT_SECURITY_CORS_ENABLED: "true"
+      FINERACT_SECURITY_CORS_ALLOWED_ORIGIN_PATTERNS: ${CBS_CONSOLE_ORIGIN:?set CBS_CONSOLE_ORIGIN}
+      FINERACT_SECURITY_CORS_ALLOW_CREDENTIALS: "true"
+      FINERACT_INSECURE_HTTP_CLIENT: "false"
+      SPRINGDOC_SWAGGER_UI_ENABLED: ${SPRINGDOC_SWAGGER_UI_ENABLED:-false}
+      SPRINGDOC_API_DOCS_ENABLED: ${SPRINGDOC_API_DOCS_ENABLED:-false}
+
+      # --- datasource (the tenants registry) ------------------------------------------
+      FINERACT_HIKARI_DRIVER_SOURCE_CLASS_NAME: org.postgresql.Driver
+      FINERACT_HIKARI_JDBC_URL: jdbc:postgresql://db:5432/${FINERACT_TENANTS_DB_NAME:?}
+      FINERACT_HIKARI_USERNAME: ${FINERACT_HIKARI_USERNAME:?}
+      FINERACT_HIKARI_PASSWORD: ${FINERACT_HIKARI_PASSWORD:?}
+      FINERACT_HIKARI_MINIMUM_IDLE: ${FINERACT_HIKARI_MINIMUM_IDLE:-3}
+      FINERACT_HIKARI_MAXIMUM_POOL_SIZE: ${FINERACT_HIKARI_MAXIMUM_POOL_SIZE:-10}
+      FINERACT_HIKARI_IDLE_TIMEOUT: "60000"
+      FINERACT_HIKARI_CONNECTION_TIMEOUT: "20000"
+      FINERACT_HIKARI_TEST_QUERY: SELECT 1
+      FINERACT_HIKARI_AUTO_COMMIT: "true"
+
+      # --- the tenant itself ----------------------------------------------------------
+      # One Fineract tenant per Malipopay environment. Dar es Salaam time, not the
+      # upstream sample's Asia/Kolkata: the tenant timezone decides business dates and
+      # therefore which day a transaction and the close-of-business job belong to.
+      FINERACT_DEFAULT_TENANTDB_HOSTNAME: db
+      FINERACT_DEFAULT_TENANTDB_PORT: "5432"
+      FINERACT_DEFAULT_TENANTDB_UID: ${FINERACT_HIKARI_USERNAME:?}
+      FINERACT_DEFAULT_TENANTDB_PWD: ${FINERACT_HIKARI_PASSWORD:?}
+      FINERACT_DEFAULT_TENANTDB_IDENTIFIER: ${FINERACT_TENANT_IDENTIFIER:?set FINERACT_TENANT_IDENTIFIER}
+      FINERACT_DEFAULT_TENANTDB_NAME: ${FINERACT_DEFAULT_TENANTDB_NAME:?}
+      FINERACT_DEFAULT_TENANTDB_DESCRIPTION: ${FINERACT_TENANT_DESCRIPTION:-Malipopay}
+      FINERACT_DEFAULT_TENANTDB_TIMEZONE: ${FINERACT_TENANT_TIMEZONE:-Africa/Dar_es_Salaam}
+      FINERACT_DEFAULT_TENANTDB_MASTER_PASSWORD: ${FINERACT_TENANT_MASTER_PASSWORD:?}
+      FINERACT_DEFAULT_MASTER_PASSWORD: ${FINERACT_TENANT_MASTER_PASSWORD:?}
+
+      # --- jobs -----------------------------------------------------------------------
+      FINERACT_JOB_LOAN_COB_ENABLED: ${FINERACT_JOB_LOAN_COB_ENABLED:-true}
+      LOAN_COB_CHUNK_SIZE: ${LOAN_COB_CHUNK_SIZE:-100}
+      LOAN_COB_PARTITION_SIZE: ${LOAN_COB_PARTITION_SIZE:-100}
+      FINERACT_REMOTE_JOB_MESSAGE_HANDLER_SPRING_EVENTS_ENABLED: "true"
+
+      # --- external business events (off until phase 4) --------------------------------
+      FINERACT_EXTERNAL_EVENTS_ENABLED: ${FINERACT_EXTERNAL_EVENTS_ENABLED:-false}
+      FINERACT_EXTERNAL_EVENTS_PRODUCER_JMS_ENABLED: ${FINERACT_EXTERNAL_EVENTS_PRODUCER_JMS_ENABLED:-false}
+
+      # --- content store ---------------------------------------------------------------
+      # Customer documents stay in the Malipopay KYC service. Anything Fineract writes here
+      # is incidental, so it goes to a tmpfs and never to a persistent volume.
+      FINERACT_CONTENT_FILESYSTEM_ROOT_FOLDER: /tmp/fineract-content
+
+      # --- observability ---------------------------------------------------------------
+      FINERACT_MANAGEMENT_ENDPOINT_WEB_EXPOSURE_INCLUDE: health,info,prometheus
+      FINERACT_MANAGEMENT_METRICS_TAGS_APPLICATION: malipopay-cbs
+      OTEL_SERVICE_NAME: malipopay-cbs
+
+      # --- JVM --------------------------------------------------------------------------
+      # No JDWP agent. Upstream's sample JAVA_TOOL_OPTIONS opens a remote debugger on port
+      # 5000 with no authentication; that is a shell on the core banking system.
+      JAVA_TOOL_OPTIONS: >-
+        -XX:MinRAMPercentage=25
+        -XX:MaxRAMPercentage=${JVM_MAX_RAM_PERCENTAGE:-70}
+        -XX:+UseContainerSupport
+        -XX:+UseStringDeduplication
+        -XX:+ExitOnOutOfMemoryError
+        --add-exports=java.naming/com.sun.jndi.ldap=ALL-UNNAMED
+        --add-opens=java.base/java.lang=ALL-UNNAMED
+        --add-opens=java.base/java.lang.invoke=ALL-UNNAMED
+        --add-opens=java.base/java.io=ALL-UNNAMED
+        --add-opens=java.base/java.security=ALL-UNNAMED
+        --add-opens=java.base/java.util=ALL-UNNAMED
+        --add-opens=java.management/javax.management=ALL-UNNAMED
+        --add-opens=java.naming/javax.naming=ALL-UNNAMED
+      # SPRING_PROFILES_ACTIVE is left unset on purpose. Upstream's sample sets
+      # "test,diagnostics"; the README states plainly that "test" must not be enabled in
+      # production.
+    ports:
+      # Loopback only. NGINX on the host proxies to it; nothing else can reach it.
+      - "${FINERACT_BIND_ADDRESS:-127.0.0.1}:${FINERACT_HOST_PORT:-8080}:8080"
+    tmpfs:
+      - /tmp:rw,nosuid,size=512m
+    volumes:
+      - cbs-logs:/var/logs/fineract:rw
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8080/fineract-provider/actuator/health | grep -q '\"status\":\"UP\"'"]
+      interval: 15s
+      timeout: 10s
+      retries: 40
+      start_period: 90s
+    stop_grace_period: 45s
+    logging: *json-logging
+    networks: [cbs]
+
+volumes:
+  cbs-pgdata:
+  cbs-logs:
+
+networks:
+  cbs:
+    driver: bridge

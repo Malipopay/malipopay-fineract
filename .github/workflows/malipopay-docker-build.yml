@@ -1,0 +1,107 @@
+# Build and publish the Malipopay core banking image.
+#
+# Why this exists at all: Apache publishes no Docker image for Fineract 1.13.0 or later, and
+# apache/fineract:latest on Docker Hub tracks the develop branch HEAD rather than a release.
+# Upstream's own publish workflow is triggered by branch pushes, never by a version tag, so
+# release tags never produce an image. To run a released version we build it ourselves.
+#
+# Tagging: <upstream release>-mp.<n>, for example 1.15.0-mp.1. The upstream part says which
+# Fineract this is; the mp part increments when this fork's deployment layer changes without
+# an upstream change. Never "latest".
+
+name: Malipopay Fineract image
+
+on:
+  push:
+    tags:
+      - 'mp/*'
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Image tag, for example 1.15.0-mp.1'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: malipopay-image-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Work out the image tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.image_tag }}"
+          else
+            TAG="${GITHUB_REF_NAME#mp/}"
+          fi
+          case "$TAG" in
+            latest|develop|"") echo "refusing to publish tag '$TAG'" >&2; exit 1 ;;
+          esac
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Publishing lockwoodtech/malipopay-fineract:$TAG"
+
+      - name: Check the tag matches the pinned upstream version
+        run: |
+          # deploy/UPSTREAM_VERSION is the single statement of which Fineract release this
+          # branch carries. If the image tag disagrees with it, one of the two is wrong and
+          # a wrong answer here ships an unexpected core banking version.
+          PINNED="$(cat deploy/UPSTREAM_VERSION)"
+          TAG="${{ steps.tag.outputs.tag }}"
+          case "$TAG" in
+            "$PINNED"-mp.*) echo "tag $TAG matches pinned upstream $PINNED" ;;
+            *) echo "tag $TAG does not match deploy/UPSTREAM_VERSION ($PINNED)" >&2; exit 1 ;;
+          esac
+
+      - name: Set up the JDK the pinned release needs
+        uses: actions/setup-java@v4
+        with:
+          # 1.15.0 builds on Java 21. Upstream develop has since moved to 25, so read the
+          # release's own build.gradle before bumping this.
+          java-version: '21'
+          distribution: 'zulu'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push with Jib
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          # There is no Dockerfile. Fineract builds its image with the Gradle Jib plugin,
+          # straight to the registry, so no local Docker daemon is involved.
+          ./gradlew --no-daemon --console=plain \
+            :fineract-provider:jib \
+            -x test -x cucumber -x buildJavaSdk \
+            -Djib.to.auth.username="$DOCKERHUB_USERNAME" \
+            -Djib.to.auth.password="$DOCKERHUB_TOKEN" \
+            -Djib.from.platforms=linux/amd64,linux/arm64 \
+            -Djib.to.image=lockwoodtech/malipopay-fineract \
+            -Djib.to.tags=${{ steps.tag.outputs.tag }}
+
+      - name: Record the digest
+        run: |
+          echo "Published lockwoodtech/malipopay-fineract:${{ steps.tag.outputs.tag }}"
+          echo "Pin this tag in deploy/env/.env.<environment> and deploy it with"
+          echo "deploy/scripts/release.sh. Never deploy a floating tag."

@@ -1,0 +1,19 @@
+# Local proof stack for a developer machine. Never used on a server.
+#
+# Compose merges port lists by appending rather than replacing, so this file sets no ports
+# of its own. Host ports come from the env file: FINERACT_HOST_PORT and LOCAL_PG_PORT.
+# It turns the API documentation back on so the surface can be explored by hand.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml \
+#     --env-file ../env/.env.local up -d
+
+services:
+  db:
+    ports:
+      - "127.0.0.1:${LOCAL_PG_PORT:-15432}:5432"
+
+  fineract:
+    environment:
+      SPRINGDOC_SWAGGER_UI_ENABLED: "true"
+      SPRINGDOC_API_DOCS_ENABLED: "true"
+      FINERACT_SECURITY_HSTS_ENABLED: "false"
