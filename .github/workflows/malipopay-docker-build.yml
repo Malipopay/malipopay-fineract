@@ -104,13 +104,20 @@ jobs:
         run: |
           # There is no Dockerfile. Fineract builds its image with the Gradle Jib plugin,
           # straight to the registry, so no local Docker daemon is involved.
+          #
+          # The tag appears in BOTH -Djib.to.image and -Djib.to.tags on purpose.
+          # -Djib.to.tags replaces the build file's own list, which ends in "latest".
+          # But jib also publishes the image reference itself, and an untagged reference
+          # defaults to :latest, so passing the repository alone would PUSH A FLOATING TAG
+          # TO DOCKER HUB. That is the precise hazard adr/0001 exists to prevent, and it was
+          # measured on a local build, not theorised.
           ./gradlew --no-daemon --console=plain \
             :fineract-provider:jib \
             -x test -x cucumber -x buildJavaSdk \
             -Djib.to.auth.username="$DOCKERHUB_USERNAME" \
             -Djib.to.auth.password="$DOCKERHUB_TOKEN" \
             -Djib.from.platforms=linux/amd64,linux/arm64 \
-            -Djib.to.image=lockwoodtech/malipopay-fineract \
+            -Djib.to.image=lockwoodtech/malipopay-fineract:${{ steps.tag.outputs.tag }} \
             -Djib.to.tags=${{ steps.tag.outputs.tag }}
 
       - name: Record the digest

@@ -72,6 +72,15 @@ the same machine.
 Full amd64 output in `proof-2026-09-10-amd64.txt`. The replayed deposit behaves identically
 on both: original transaction id returned, `x-served-from-cache: true`, balance 100,000.
 
+**A fifth defect, and the most consequential, found by inspecting the tags after a build.**
+`-Djib.to.tags` replaces the build file's own list, which is what stops a build producing
+`1.16.0-SNAPSHOT`. But jib also publishes the image reference itself, and an untagged
+reference defaults to `latest`. The CI workflow passed the repository alone with the tag only
+in `-Djib.to.tags`, so **the first tag push would have published a floating `latest` for a
+core banking image to Docker Hub**, which is the precise hazard
+`adr/0001-fork-and-pin-fineract.md` exists to prevent. The tag now appears in both places, and
+a rebuild confirms exactly one tag results.
+
 **A fourth defect, found by building the second architecture.** Gradle does not track
 `-Djib.from.platforms` as a task input, so `jibBuildTar` reported `UP-TO-DATE` and left the
 previous architecture's tar in place. The build reported success and loaded an arm64 image

@@ -50,7 +50,7 @@ set +e
   :fineract-provider:jibBuildTar \
   -x test -x cucumber -x buildJavaSdk \
   -Dorg.gradle.jvmargs="$JVMARGS" \
-  -Djib.to.image="$IMAGE_REPO" \
+  -Djib.to.image="$IMAGE_REPO:$IMAGE_TAG" \
   -Djib.to.tags="$IMAGE_TAG" \
   -Djib.from.platforms="$JIB_ARCH" 2>&1 | tee /logs/step2.log
 RC=${PIPESTATUS[0]}
@@ -62,11 +62,17 @@ fi
 ls -la fineract-provider/build/*.tar
 INNER
 
-# Pass the repository and the tag SEPARATELY. Putting the tag inside -Djib.to.image leaves
-# the build file's own tag list in place, and that list is ["${project.version}", "latest"].
-# A local build then also produces :latest and :1.16.0-SNAPSHOT, and a push --all-tags would
-# publish exactly the floating tag this whole deployment exists to avoid. Setting
-# -Djib.to.tags replaces that list. CI already does it this way.
+# The tag goes in BOTH -Djib.to.image and -Djib.to.tags, and both are load bearing.
+#
+# The build file carries its own tag list, ["${project.version}", "latest"]. -Djib.to.tags
+# replaces that list, which is what stops a build also producing :1.16.0-SNAPSHOT.
+#
+# But jib ALSO publishes the image reference itself, and an untagged reference defaults to
+# :latest. So passing only the repository, with the tag in -Djib.to.tags, still produces a
+# floating :latest beside the pinned tag. Measured, not assumed: that is exactly what
+# happened on the first amd64 build, and the stray-tag check below is what caught it.
+#
+# Putting the tag in both makes the reference explicit and the list a single entry.
 IMAGE_REPO="${IMAGE%%:*}"
 IMAGE_TAG="${IMAGE##*:}"
 
