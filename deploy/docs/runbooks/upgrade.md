@@ -72,3 +72,29 @@ Schema changed: stop the Fineract container first, then
 the previous image. Everything written after the snapshot is gone. Before running it, work
 out what that is: query the transaction count since the snapshot timestamp and tell whoever
 owns those transactions.
+
+## Building the image, and the one flag that will catch you
+
+The build workflow runs the Avro Java generation as its own step before the image step. That
+is not tidiness, it is required, and leaving it out fails with:
+
+```
+package org.apache.fineract.avro.generic.v1 does not exist
+Execution failed for task ':fineract-core:compileJava'
+```
+
+Two different Gradle tasks are named `buildJavaSdk`:
+
+| Task | What it does | Skippable |
+|---|---|---|
+| `:fineract-client-feign:buildJavaSdk` | Generates the OpenAPI Java client | yes |
+| `:fineract-avro-schemas:buildJavaSdk` | Generates the Avro Java classes `fineract-core` compiles against | **no** |
+
+Gradle's `-x` excludes by name across every project, so `-x buildJavaSdk` takes both. Upstream
+uses that same exclusion and gets away with it because its CI builds the workspace in an
+earlier action that runs `:fineract-avro-schemas:buildJavaSdk` first. A clean build without
+that prior step fails. Naming the task inside the same invocation does not help either: the
+exclusion still wins. It has to be a separate invocation.
+
+This was found by running the build, not by reading the workflow, and it would have failed on
+the first tag push.

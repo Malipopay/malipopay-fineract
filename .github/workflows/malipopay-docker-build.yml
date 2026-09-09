@@ -84,6 +84,19 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      - name: Generate the Avro Java sources
+        run: |
+          # This step is NOT optional and its absence fails the build below with
+          # "package org.apache.fineract.avro.generic.v1 does not exist".
+          #
+          # Two different tasks are named buildJavaSdk. The one in fineract-client-feign
+          # generates the OpenAPI Java client and is genuinely skippable. The one in
+          # fineract-avro-schemas generates the Avro Java classes that fineract-core compiles
+          # against, and is not. Gradle's -x excludes by NAME across every project, so the
+          # exclusion below kills both. Upstream hits the same thing and solves it exactly
+          # this way, in .github/actions/setup-and-build-fineract.
+          ./gradlew --no-daemon --console=plain :fineract-avro-schemas:buildJavaSdk
+
       - name: Build and push with Jib
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
