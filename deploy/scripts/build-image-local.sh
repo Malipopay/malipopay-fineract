@@ -39,6 +39,11 @@ echo "=== step 1: Avro Java sources ==="
   -Dorg.gradle.jvmargs="$JVMARGS" 2>&1 | tee /logs/step1.log
 
 echo "=== step 2: image ==="
+# Gradle does NOT track -Djib.from.platforms as a task input, so jibBuildTar reports
+# UP-TO-DATE and silently leaves the previous architecture's tar in place. A build for a
+# different platform then "succeeds" and loads the wrong image. Removing the output is what
+# forces the task to run.
+rm -f fineract-provider/build/jib-image.tar
 set +e
 ./gradlew --no-daemon --console=plain \
   -I /workspace/deploy/build/local-image.init.gradle \
@@ -76,6 +81,17 @@ TAR="$REPO/fineract-provider/build/jib-image.tar"
 [ -f "$TAR" ] || TAR="$(ls "$REPO"/fineract-provider/build/*.tar | head -1)"
 docker load -i "$TAR"
 docker image inspect "$IMAGE" --format 'built {{.Id}} arch={{.Architecture}}'
+
+# Verify rather than trust. A green build is not evidence that the image is for the platform
+# that was asked for: see the note above about jibBuildTar and UP-TO-DATE.
+WANT="${ARCH##*/}"
+GOT="$(docker image inspect "$IMAGE" --format '{{.Architecture}}')"
+if [ "$GOT" != "$WANT" ]; then
+  echo "REFUSING: asked for ${WANT}, the loaded image is ${GOT}." >&2
+  echo "The build almost certainly reported UP-TO-DATE and reused the previous tar." >&2
+  exit 1
+fi
+echo "architecture confirmed: ${GOT}"
 echo
 # Prove the build produced exactly one tag, not a floating one alongside it.
 STRAY="$(docker image ls "$IMAGE_REPO" --format '{{.Tag}}' | grep -v "^${IMAGE_TAG}$" || true)"

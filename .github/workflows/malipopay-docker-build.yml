@@ -35,7 +35,7 @@ jobs:
     timeout-minutes: 90
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -68,7 +68,7 @@ jobs:
           esac
 
       - name: Set up the JDK the pinned release needs
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           # 1.15.0 builds on Java 21. Upstream develop has since moved to 25, so read the
           # release's own build.gradle before bumping this.
